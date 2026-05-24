@@ -150,6 +150,8 @@ TfLiteStatus LoadQuantModelAndPerformInference() {
 }
 
 int main(int argc, char* argv[]) {
+  MicroPrintf("F:%s --- L:%d\r\n", __func__, __LINE__);
+
   tflite::InitializeTarget();
   TF_LITE_ENSURE_STATUS(ProfileMemoryAndLatency());
   TF_LITE_ENSURE_STATUS(LoadFloatModelAndPerformInference());
