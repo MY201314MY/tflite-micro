@@ -27,6 +27,17 @@ py_binary(
 )
 
 py_binary(
+    name = "ptq",
+    srcs = ["ptq.py"],
+    deps = [
+        requirement("absl_py"),
+        requirement("numpy"),
+        requirement("tensorflow"),
+        "//python/tflite_micro:runtime",
+    ],
+)
+
+py_binary(
     name = "evaluate",
     srcs = ["evaluate.py"],
     deps = [
