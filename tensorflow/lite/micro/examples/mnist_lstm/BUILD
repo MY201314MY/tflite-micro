@@ -2,6 +2,21 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@tflm_pip_deps//:requirements.bzl", "requirement")
 load("//tensorflow/lite/micro:build_def.bzl", "INCOMPATIBLE_WITH_WINDOWS")
 
+cc_binary(
+    name = "mnist_lstm_test",
+    srcs = [
+        "mnist_lstm_test.cc",
+        "trained_lstm_int8_model_data.h",
+        "mnist_lstm_quant.h",
+    ],
+    deps = [
+        "//tensorflow/lite/micro:micro_framework",
+        "//tensorflow/lite/micro:micro_log",
+        "//tensorflow/lite/micro:system_setup",
+        "//tensorflow/lite/schema:schema_fbs",
+    ],
+)
+
 py_binary(
     name = "train",
     srcs = ["train.py"],
