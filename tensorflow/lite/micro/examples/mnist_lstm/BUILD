@@ -6,8 +6,7 @@ cc_binary(
     name = "mnist_lstm_test",
     srcs = [
         "mnist_lstm_test.cc",
-        "trained_lstm_int8_model_data.h",
-        "mnist_lstm_quant.h",
+        "mnist_cnn_quant_model_data.h",
     ],
     deps = [
         "//tensorflow/lite/micro:micro_framework",
