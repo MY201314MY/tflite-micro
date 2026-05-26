@@ -6,6 +6,7 @@ cc_binary(
     name = "mnist_lstm_test",
     srcs = [
         "mnist_lstm_test.cc",
+        "test_input_digital.h",
         "mnist_cnn_quant_model_data.h",
     ],
     deps = [
