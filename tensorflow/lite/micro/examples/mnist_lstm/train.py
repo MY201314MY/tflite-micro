@@ -1,3 +1,4 @@
+# 2 --> 8 op
 import os
 import numpy as np
 import tensorflow as tf
@@ -12,32 +13,45 @@ flags.DEFINE_string("save_dir", "/tmp/cnn_trained_model", "the directory to save
 flags.DEFINE_boolean("quantize", True, "convert and save the full integer (int8) quantized model.")
 
 def create_cnn_model():
-    """创建一个专为 C++ / TFLite Micro 优化、从根源杜绝动态 SHAPE 算子的静态 CNN 模型"""
+    """
+    目标：追求绝对的高精度（MNIST 理论极限 99.2%+）
+    特点：通道数倍增（32->64），引入 BN 稳定量化，引入 Dropout 榨干泛化性能。
+    同时保持：静态 Shape 锁死，完全兼容 TFLite Micro。
+    """
     model = tf.keras.models.Sequential([
-        # 💡 核心锁死：使用标准 InputLayer 并锁定 batch_size=1
+        # 💡 核心锁死输入 (这里的 batch_size=1 锁死了 TFLite 模型的静态形状)
         tf.keras.layers.InputLayer(input_shape=(28, 28, 1), batch_size=1, name="input"),
         
-        # 极其轻量的卷积与池化
-        tf.keras.layers.Conv2D(8, (3, 3), activation='relu', name="conv1"),
-        tf.keras.layers.MaxPooling2D((2, 2), name="pool1"),
+        # 第一层卷积：大通道捕捉更丰富的边缘细节
+        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', padding='valid', name="conv1"),
+        tf.keras.layers.BatchNormalization(name="bn1"), 
+        tf.keras.layers.MaxPooling2D((2, 2), name="pool1"), 
         
-        # 💡 绝对不用 Flatten()，直接用明确的整型元组 (1352,) 写死 Reshape
-        tf.keras.layers.Reshape((1352,), name="reshape_node"),
+        # 第二层卷积：高维特征提取
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu', padding='valid', name="conv2"),
+        tf.keras.layers.BatchNormalization(name="bn2"),
+        tf.keras.layers.MaxPooling2D((2, 2), name="pool2"), 
+        
+        # 💡 明确计算展平大小：5 * 5 * 64 = 1600
+        tf.keras.layers.Reshape((1600,), name="reshape_node"),
+        
+        # 强力全连接层：特征最后的深度融合
+        tf.keras.layers.Dense(128, activation='relu', name="dense_hidden"),
+        tf.keras.layers.Dropout(0.25, name="dropout"), 
         
         # 最终分类
         tf.keras.layers.Dense(10, activation='softmax', name="output")
     ])
     
-    model.compile(optimizer="adam",
-                  loss="sparse_categorical_crossentropy",
-                  metrics=["accuracy"])
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"])
     model.summary()
     return model
 
 def get_train_data():
     (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
     x_train = x_train / 255.0
-    # 扩展出通道维 (28, 28) -> (28, 28, 1)
     x_train = np.expand_dims(x_train, axis=-1).astype(np.float32)
     return (x_train, y_train)
 
@@ -53,9 +67,11 @@ def main(_):
     
     # 1. 建立并训练模型
     model = create_cnn_model()
+    
+    # 💡 核心修正：训练时使用大 batch_size（如 128），让 BN 层正常工作，且速度极快
     model.fit(x_train, y_train, 
               epochs=FLAGS.epochs, 
-              batch_size=1, 
+              batch_size=128, 
               validation_split=0.2,
               callbacks=[early_stop])
 
@@ -63,10 +79,9 @@ def main(_):
         os.makedirs(FLAGS.save_dir)
 
     # =====================================================================
-    # 💡 核心改进：提取完全死锁形状的 Concrete Function（具象函数）
+    # 💡 核心改进：提取完全死锁形状的 Concrete Function
     # =====================================================================
     run_model = tf.function(lambda x: model(x))
-    # 使用包含固定 Batch Size 维度的 TensorSpec 进行绑定：[1, 28, 28, 1]
     concrete_func = run_model.get_concrete_function(
         tf.TensorSpec([1, 28, 28, 1], model.inputs[0].dtype)
     )
@@ -85,9 +100,10 @@ def main(_):
     # 3. 转换真正的全整型 INT8 瘦身版本
     if FLAGS.quantize:
         def representative_dataset_gen():
-            # 提供 100 个样本用于激活值校准
-            for data in x_train[:100]:
-                # 严格对齐 (1, 28, 28, 1)
+            # 从训练集中随机均匀抽样 100 个进行量化校准
+            indices = np.random.choice(x_train.shape[0], 100, replace=False)
+            for idx in indices:
+                data = x_train[idx]
                 yield [np.expand_dims(data, axis=0)]
 
         # 同样基于静态 Concrete Function 建立量化转换器

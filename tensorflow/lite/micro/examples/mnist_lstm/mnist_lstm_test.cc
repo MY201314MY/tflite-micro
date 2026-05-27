@@ -21,7 +21,7 @@ uint8_t *p_sample_data = sample9_data;
 constexpr int kTensorArenaSize = 64 * 1024;
 alignas(16) uint8_t tensor_arena[kTensorArenaSize];
 
-// --- 你的优秀调试函数保留 ---
+// --- 调试函数保留 ---
 void print_image_stats(uint8_t* image, int size, const char* name) {
     std::cout << "\n=== " << name << " Statistics ===" << std::endl;
     int min_val = 255, max_val = 0;
@@ -107,12 +107,16 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "✓ Model loaded successfully" << std::endl;
 
-    static tflite::MicroMutableOpResolver<5> micro_op_resolver;
+    // 💡 将容量扩展至 8，并补上 AddMul() 算子
+    static tflite::MicroMutableOpResolver<8> micro_op_resolver;
     micro_op_resolver.AddConv2D();
     micro_op_resolver.AddMaxPool2D();
     micro_op_resolver.AddReshape();
     micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddSoftmax();
+    micro_op_resolver.AddAdd();        // 兜底量化 Bias/Rescale 加法
+    micro_op_resolver.AddQuantize();   // 兜底输入硬量化转换
+    micro_op_resolver.AddMul();        // 💡 核心新增：解决 "Didn't find op for builtin opcode 'MUL'" 报错
 
     static tflite::MicroInterpreter interpreter(
         model, micro_op_resolver, tensor_arena, kTensorArenaSize);
@@ -134,7 +138,7 @@ int main(int argc, char* argv[]) {
     print_image_stats(p_sample_data, 784, "Raw Input Image");
     print_image_ascii(p_sample_data, 28, 28);
     
-    // 2. 预处理量化（已修复 for 循环结构，且移除了边缘压缩，并使用了乘法加速优化）
+    // 2. 预处理量化
     int8_t* input_buffer = tflite::GetTensorData<int8_t>(input);
     int input_size = input->bytes;
 
@@ -144,7 +148,7 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < input_size; ++i) {
         float raw_val = static_cast<float>(p_sample_data[i]);
         
-        // 高效量化公式：将原来的两层除法运算转换为了单次乘法
+        // 高效量化公式
         float quantized_float = (raw_val * inv_scale_255) + zero_point_f;
         
         quantized_float = std::max(-128.0f, std::min(127.0f, quantized_float));
